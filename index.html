@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Split — shared trip expenses</title>
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --text:#f1f5f9;
+    --accent:#38bdf8; --accent2:#34d399; --danger:#f87171; --line:#334155;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       background:var(--bg);color:var(--text);line-height:1.5}
+  .wrap{max-width:680px;margin:0 auto;padding:20px 16px 80px}
+  h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:24px 0 10px}
+  .muted{color:var(--muted);font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+       background:#0b1220;color:var(--text);font-size:15px}
+  button{cursor:pointer;border:none;border-radius:10px;padding:11px 14px;font-size:15px;font-weight:600;color:#06202b;background:var(--accent)}
+  button.secondary{background:#0b1220;color:var(--text);border:1px solid var(--line)}
+  button.ghost{background:transparent;color:var(--danger);padding:6px 8px;font-weight:500}
+  .row{display:flex;gap:8px;align-items:center}
+  .row > *{flex:1}
+  .row .shrink{flex:0 0 auto}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:#0b1220;border:1px solid var(--line);
+        border-radius:999px;padding:6px 10px;margin:4px 6px 0 0;font-size:14px}
+  .people-pick{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .pick{display:flex;align-items:center;gap:7px;background:#0b1220;border:1px solid var(--line);
+        border-radius:10px;padding:8px 11px;font-size:14px;cursor:pointer;user-select:none}
+  .pick input{width:auto}
+  .expense{border-top:1px solid var(--line);padding:11px 0}
+  .expense:first-child{border-top:none}
+  .amt{font-variant-numeric:tabular-nums;font-weight:700}
+  .settle{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:11px 0;font-size:15px}
+  .settle:first-child{border-top:none}
+  .pill{font-size:12px;background:#0b1220;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted)}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
+  .hidden{display:none}
+  .banner{background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;font-size:14px;margin-bottom:12px}
+  a{color:var(--accent)}
+  .big{font-size:18px;font-weight:700}
+  .pos{color:var(--accent2)} .neg{color:var(--danger)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>💸 Split</h1>
+  <p class="muted">Share a trip link. Everyone adds what they paid. It works out who pays whom.</p>
+
+  <div id="config-warn" class="banner hidden">
+    ⚠️ App not configured yet. Open <b>index.html</b> and paste your Supabase URL and anon key near the top of the script.
+  </div>
+
+  <!-- HOME -->
+  <section id="home" class="hidden">
+    <div class="card">
+      <h2 style="margin-top:0">Start a new trip</h2>
+      <label>Trip name</label>
+      <input id="trip-name" placeholder="e.g. Tokyo 2026" />
+      <label>Currency</label>
+      <select id="trip-currency">
+        <option>HKD</option><option>USD</option><option>JPY</option><option>EUR</option>
+        <option>GBP</option><option>CNY</option><option>TWD</option><option>KRW</option>
+        <option>THB</option><option>SGD</option><option>AUD</option>
+      </select>
+      <div style="margin-top:14px"><button id="create-trip">Create trip</button></div>
+    </div>
+    <p class="muted">Already have a trip link? Just open it.</p>
+  </section>
+
+  <!-- TRIP -->
+  <section id="trip" class="hidden">
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="big" id="trip-title">—</div>
+          <div class="muted" id="trip-sub">—</div>
+        </div>
+        <div class="shrink"><button class="secondary" id="share-btn">🔗 Share link</button></div>
+      </div>
+    </div>
+
+    <h2>People</h2>
+    <div class="card">
+      <div class="row">
+        <input id="person-name" placeholder="Add a person…" />
+        <button class="shrink" id="add-person">Add</button>
+      </div>
+      <div id="people-list" style="margin-top:8px"></div>
+    </div>
+
+    <h2>Add an expense</h2>
+    <div class="card">
+      <label>What was it?</label>
+      <input id="exp-title" placeholder="e.g. Dinner" />
+      <div class="row">
+        <div>
+          <label>Amount</label>
+          <input id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00" />
+        </div>
+        <div>
+          <label>Paid by</label>
+          <select id="exp-paidby"></select>
+        </div>
+      </div>
+      <label>Shared by (untick anyone who didn't share this)</label>
+      <div class="toolbar">
+        <button class="secondary" id="pick-all" style="flex:0 0 auto">Select all</button>
+        <button class="secondary" id="pick-none" style="flex:0 0 auto">Clear</button>
+      </div>
+      <div id="share-pick" class="people-pick"></div>
+      <div style="margin-top:14px"><button id="add-expense">Add expense</button></div>
+    </div>
+
+    <h2>Expenses</h2>
+    <div class="card"><div id="expense-list"><p class="muted">No expenses yet.</p></div></div>
+
+    <h2>Who pays whom</h2>
+    <div class="card"><div id="settlement"><p class="muted">Add people and expenses to see the result.</p></div></div>
+  </section>
+</div>
+
+<!-- Supabase client -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* ============================================================
+   1) CONFIG — paste your two Supabase values here.
+   Find them in Supabase: Project Settings > API
+   ============================================================ */
+const SUPABASE_URL  = "https://ujdofqpthpfpkyrqtqlb.supabase.co";      // base project URL (no /rest/v1/)
+const SUPABASE_ANON_KEY = "sb_publishable_1i7h5UxnR1V30H2KwPKhQA_Qy-DmH1x"; // publishable key (safe in browser)
+/* ============================================================ */
+
+const $ = (id) => document.getElementById(id);
+const configured = SUPABASE_URL && !SUPABASE_URL.includes("YOUR_") &&
+                   SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes("YOUR_");
+
+let sb = null;
+let state = { trip:null, people:[], expenses:[] }; // expenses include .shares array of person_ids
+
+function money(n, cur){
+  const v = Math.round(n*100)/100;
+  return new Intl.NumberFormat(undefined,{style:'currency',currency:cur||'HKD',
+         currencyDisplay:'narrowSymbol'}).format(v);
+}
+function tripIdFromUrl(){ return new URLSearchParams(location.search).get('trip'); }
+
+async function boot(){
+  if(!configured){ $('config-warn').classList.remove('hidden'); }
+  if(configured){ sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }
+
+  const tid = tripIdFromUrl();
+  if(tid && configured){ await openTrip(tid); }
+  else { $('home').classList.remove('hidden'); }
+}
+
+/* ---------- HOME: create trip ---------- */
+$('create-trip').addEventListener('click', async ()=>{
+  if(!configured){ alert('Configure Supabase first (see banner).'); return; }
+  const name = $('trip-name').value.trim();
+  const currency = $('trip-currency').value;
+  if(!name){ alert('Give the trip a name.'); return; }
+  const { data, error } = await sb.from('trips').insert({name, currency}).select().single();
+  if(error){ alert('Could not create trip: '+error.message); return; }
+  location.search = '?trip='+data.id; // reload into the trip
+});
+
+/* ---------- Load + render a trip ---------- */
+async function openTrip(tid){
+  const { data:trip, error } = await sb.from('trips').select('*').eq('id', tid).single();
+  if(error || !trip){ alert('Trip not found. Check the link.'); $('home').classList.remove('hidden'); return; }
+  state.trip = trip;
+  $('home').classList.add('hidden');
+  $('trip').classList.remove('hidden');
+  $('trip-title').textContent = trip.name;
+  await refresh();
+}
+
+async function refresh(){
+  const tid = state.trip.id;
+  const [{data:people},{data:expenses},{data:shares}] = await Promise.all([
+    sb.from('people').select('*').eq('trip_id',tid).order('created_at'),
+    sb.from('expenses').select('*').eq('trip_id',tid).order('created_at'),
+    sb.from('expense_shares').select('*')
+  ]);
+  state.people = people||[];
+  const shareMap = {};
+  (shares||[]).forEach(s=>{ (shareMap[s.expense_id] ||= []).push(s.person_id); });
+  state.expenses = (expenses||[]).map(e=>({...e, shares: shareMap[e.id]||[]}));
+  render();
+}
+
+/* ---------- People ---------- */
+$('add-person').addEventListener('click', addPerson);
+$('person-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addPerson(); });
+async function addPerson(){
+  const name = $('person-name').value.trim();
+  if(!name) return;
+  const { error } = await sb.from('people').insert({trip_id:state.trip.id, name});
+  if(error){ alert(error.message); return; }
+  $('person-name').value='';
+  await refresh();
+}
+async function removePerson(id){
+  if(!confirm('Remove this person? Their expenses/shares will also be removed.')) return;
+  await sb.from('people').delete().eq('id', id);
+  await refresh();
+}
+
+/* ---------- Expenses ---------- */
+$('pick-all').addEventListener('click', ()=> setAllPicks(true));
+$('pick-none').addEventListener('click', ()=> setAllPicks(false));
+function setAllPicks(v){ document.querySelectorAll('#share-pick input').forEach(c=>c.checked=v); }
+
+$('add-expense').addEventListener('click', addExpense);
+async function addExpense(){
+  const title = $('exp-title').value.trim();
+  const amount = parseFloat($('exp-amount').value);
+  const paid_by = $('exp-paidby').value;
+  if(!title){ alert('Enter what it was for.'); return; }
+  if(!(amount>0)){ alert('Enter a valid amount.'); return; }
+  if(!paid_by){ alert('Choose who paid.'); return; }
+  const sharers = [...document.querySelectorAll('#share-pick input:checked')].map(c=>c.value);
+  if(sharers.length===0){ alert('Tick at least one person who shared this.'); return; }
+
+  const { data:exp, error } = await sb.from('expenses')
+      .insert({trip_id:state.trip.id, title, amount, paid_by}).select().single();
+  if(error){ alert(error.message); return; }
+  const rows = sharers.map(pid=>({expense_id:exp.id, person_id:pid}));
+  const { error:e2 } = await sb.from('expense_shares').insert(rows);
+  if(e2){ alert(e2.message); return; }
+  $('exp-title').value=''; $('exp-amount').value='';
+  await refresh();
+}
+async function removeExpense(id){
+  if(!confirm('Delete this expense?')) return;
+  await sb.from('expenses').delete().eq('id', id);
+  await refresh();
+}
+
+/* ---------- Share link ---------- */
+$('share-btn').addEventListener('click', async ()=>{
+  const url = location.origin + location.pathname + '?trip=' + state.trip.id;
+  try{ await navigator.clipboard.writeText(url); alert('Link copied!\n\n'+url); }
+  catch{ prompt('Copy this link:', url); }
+});
+
+/* ---------- Settlement math ---------- */
+function computeSettlement(){
+  const cur = state.trip.currency;
+  const net = {}; // person_id -> paid - owed
+  state.people.forEach(p=> net[p.id]=0);
+  state.expenses.forEach(e=>{
+    if(!e.shares.length) return;
+    const each = e.amount / e.shares.length;
+    net[e.paid_by] = (net[e.paid_by]||0) + e.amount;
+    e.shares.forEach(pid=> net[pid] = (net[pid]||0) - each);
+  });
+  // round to cents
+  Object.keys(net).forEach(k=> net[k]=Math.round(net[k]*100)/100);
+
+  const debtors=[], creditors=[];
+  Object.entries(net).forEach(([id,v])=>{
+    if(v < -0.005) debtors.push({id, amt:-v});
+    else if(v > 0.005) creditors.push({id, amt:v});
+  });
+  debtors.sort((a,b)=>b.amt-a.amt); creditors.sort((a,b)=>b.amt-a.amt);
+
+  const payments=[];
+  let i=0,j=0;
+  while(i<debtors.length && j<creditors.length){
+    const pay = Math.min(debtors[i].amt, creditors[j].amt);
+    payments.push({from:debtors[i].id, to:creditors[j].id, amt:Math.round(pay*100)/100});
+    debtors[i].amt-=pay; creditors[j].amt-=pay;
+    if(debtors[i].amt<0.005) i++;
+    if(creditors[j].amt<0.005) j++;
+  }
+  return {net, payments, cur};
+}
+
+/* ---------- Render ---------- */
+function nameOf(id){ const p=state.people.find(x=>x.id===id); return p?p.name:'?'; }
+
+function render(){
+  const cur = state.trip.currency;
+  $('trip-sub').textContent = state.people.length + ' people · ' +
+       state.expenses.length + ' expenses · ' + cur;
+
+  // people chips
+  $('people-list').innerHTML = state.people.length ?
+    state.people.map(p=>`<span class="chip">${esc(p.name)}
+      <button class="ghost" onclick="removePerson('${p.id}')">✕</button></span>`).join('') :
+    '<p class="muted">No people yet. Add everyone on the trip.</p>';
+
+  // paid-by dropdown
+  $('exp-paidby').innerHTML = state.people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+
+  // shared-by picker (default everyone ticked)
+  $('share-pick').innerHTML = state.people.map(p=>
+    `<label class="pick"><input type="checkbox" value="${p.id}" checked> ${esc(p.name)}</label>`).join('');
+
+  // expense list
+  $('expense-list').innerHTML = state.expenses.length ? state.expenses.map(e=>`
+    <div class="expense">
+      <div class="row">
+        <div>
+          <div><b>${esc(e.title)}</b></div>
+          <div class="muted">Paid by ${esc(nameOf(e.paid_by))} · split ${e.shares.length} way${e.shares.length>1?'s':''}
+            ${e.shares.length<state.people.length?` <span class="pill">excludes ${state.people.length-e.shares.length}</span>`:''}</div>
+        </div>
+        <div class="shrink amt">${money(e.amount,cur)}</div>
+        <div class="shrink"><button class="ghost" onclick="removeExpense('${e.id}')">Delete</button></div>
+      </div>
+    </div>`).join('') : '<p class="muted">No expenses yet.</p>';
+
+  // settlement
+  if(state.people.length && state.expenses.length){
+    const {net, payments} = computeSettlement();
+    let html = payments.length ?
+      payments.map(p=>`<div class="settle"><span><b>${esc(nameOf(p.from))}</b> → <b>${esc(nameOf(p.to))}</b></span>
+                       <span class="amt">${money(p.amt,cur)}</span></div>`).join('')
+      : '<p class="muted">All settled up — nobody owes anything. 🎉</p>';
+    html += '<h2 style="margin-bottom:6px">Balances</h2>';
+    html += state.people.map(p=>{
+      const v = net[p.id]||0;
+      const cls = v>0.005?'pos':(v<-0.005?'neg':'muted');
+      const lbl = v>0.005?'gets back':(v<-0.005?'owes':'even');
+      return `<div class="settle"><span>${esc(p.name)}</span>
+              <span class="${cls}">${lbl} ${money(Math.abs(v),cur)}</span></div>`;
+    }).join('');
+    $('settlement').innerHTML = html;
+  } else {
+    $('settlement').innerHTML = '<p class="muted">Add people and expenses to see the result.</p>';
+  }
+}
+
+function esc(s){ return String(s).replace(/[&<>"']/g, m=>(
+  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// expose handlers used in inline onclick
+window.removePerson = removePerson;
+window.removeExpense = removeExpense;
+
+boot();
+</script>
+</body>
+</html>
