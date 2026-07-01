@@ -37,6 +37,10 @@
   .settle{display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:11px 0;font-size:15px}
   .settle:first-child{border-top:none}
   .pill{font-size:12px;background:#0b1220;border:1px solid var(--line);border-radius:999px;padding:3px 9px;color:var(--muted)}
+  .badge{font-size:12px;color:var(--accent2);margin-left:4px}
+  .pickwrap{display:flex;flex-direction:column;gap:0}
+  .kidamt{width:150px;margin-top:6px;padding:7px 9px;font-size:13px}
+  .cap{font-size:12px;color:var(--muted);margin-top:2px}
   .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 4px}
   .hidden{display:none}
   .banner{background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;font-size:14px;margin-bottom:12px}
@@ -89,7 +93,11 @@
         <input id="person-name" placeholder="Add a person…" />
         <button class="shrink" id="add-person">Add</button>
       </div>
+      <label class="pick" style="width:fit-content;margin-top:8px">
+        <input type="checkbox" id="person-child"> 🧒 This person is a child
+      </label>
       <div id="people-list" style="margin-top:8px"></div>
+      <div class="cap">Tip: tap a person to toggle their child tag. On each expense you can type a child's own price.</div>
     </div>
 
     <h2>Add an expense</h2>
@@ -107,6 +115,7 @@
         </div>
       </div>
       <label>Shared by (untick anyone who didn't share this)</label>
+      <div class="cap">For a child, type their own price if it differs (e.g. half-price ticket). Leave blank to split evenly.</div>
       <div class="toolbar">
         <button class="secondary" id="pick-all" style="flex:0 0 auto">Select all</button>
         <button class="secondary" id="pick-none" style="flex:0 0 auto">Clear</button>
@@ -188,7 +197,9 @@ async function refresh(){
   ]);
   state.people = people||[];
   const shareMap = {};
-  (shares||[]).forEach(s=>{ (shareMap[s.expense_id] ||= []).push(s.person_id); });
+  (shares||[]).forEach(s=>{
+    (shareMap[s.expense_id] ||= []).push({ person_id:s.person_id, amount:s.amount });
+  });
   state.expenses = (expenses||[]).map(e=>({...e, shares: shareMap[e.id]||[]}));
   render();
 }
@@ -199,9 +210,10 @@ $('person-name').addEventListener('keydown', e=>{ if(e.key==='Enter') addPerson(
 async function addPerson(){
   const name = $('person-name').value.trim();
   if(!name) return;
-  const { error } = await sb.from('people').insert({trip_id:state.trip.id, name});
+  const is_child = $('person-child').checked;
+  const { error } = await sb.from('people').insert({trip_id:state.trip.id, name, is_child});
   if(error){ alert(error.message); return; }
-  $('person-name').value='';
+  $('person-name').value=''; $('person-child').checked=false;
   await refresh();
 }
 async function removePerson(id){
@@ -209,27 +221,54 @@ async function removePerson(id){
   await sb.from('people').delete().eq('id', id);
   await refresh();
 }
+async function toggleChild(id){
+  const p = state.people.find(x=>x.id===id); if(!p) return;
+  await sb.from('people').update({is_child: !p.is_child}).eq('id', id);
+  await refresh();
+}
 
 /* ---------- Expenses ---------- */
 $('pick-all').addEventListener('click', ()=> setAllPicks(true));
 $('pick-none').addEventListener('click', ()=> setAllPicks(false));
-function setAllPicks(v){ document.querySelectorAll('#share-pick input').forEach(c=>c.checked=v); }
+function setAllPicks(v){ document.querySelectorAll('#share-pick .share-cb').forEach(c=>c.checked=v); }
 
 $('add-expense').addEventListener('click', addExpense);
 async function addExpense(){
   const title = $('exp-title').value.trim();
-  const amount = parseFloat($('exp-amount').value);
+  const amount = Math.round(parseFloat($('exp-amount').value)*100)/100;
   const paid_by = $('exp-paidby').value;
   if(!title){ alert('Enter what it was for.'); return; }
-  if(!(amount>0)){ alert('Enter a valid amount.'); return; }
+  if(!(amount>0)){ alert('Enter a valid total amount.'); return; }
   if(!paid_by){ alert('Choose who paid.'); return; }
-  const sharers = [...document.querySelectorAll('#share-pick input:checked')].map(c=>c.value);
+  const sharers = [...document.querySelectorAll('#share-pick .share-cb:checked')].map(c=>c.value);
   if(sharers.length===0){ alert('Tick at least one person who shared this.'); return; }
+
+  // Collect fixed (child) amounts that were typed in
+  const fixed = {};   // person_id -> amount
+  let sumFixed = 0, evenCount = 0;
+  for(const pid of sharers){
+    const inp = document.querySelector('.kidamt[data-pid="'+pid+'"]');
+    const val = inp ? parseFloat(inp.value) : NaN;
+    if(inp && inp.value.trim()!=='' && !isNaN(val)){
+      if(val < 0){ alert('A child\'s price cannot be negative.'); return; }
+      fixed[pid] = Math.round(val*100)/100;
+      sumFixed += fixed[pid];
+    } else {
+      evenCount++;
+    }
+  }
+  sumFixed = Math.round(sumFixed*100)/100;
+  if(sumFixed - amount > 0.005){
+    alert('The children\'s prices ('+sumFixed+') add up to more than the total ('+amount+').'); return;
+  }
+  if(evenCount===0 && Math.abs(sumFixed - amount) > 0.005){
+    alert('Everyone included has a fixed price, but they add up to '+sumFixed+', not the total '+amount+'. Adjust the amounts or leave someone on even split.'); return;
+  }
 
   const { data:exp, error } = await sb.from('expenses')
       .insert({trip_id:state.trip.id, title, amount, paid_by}).select().single();
   if(error){ alert(error.message); return; }
-  const rows = sharers.map(pid=>({expense_id:exp.id, person_id:pid}));
+  const rows = sharers.map(pid=>({expense_id:exp.id, person_id:pid, amount: (pid in fixed) ? fixed[pid] : null}));
   const { error:e2 } = await sb.from('expense_shares').insert(rows);
   if(e2){ alert(e2.message); return; }
   $('exp-title').value=''; $('exp-amount').value='';
@@ -255,9 +294,15 @@ function computeSettlement(){
   state.people.forEach(p=> net[p.id]=0);
   state.expenses.forEach(e=>{
     if(!e.shares.length) return;
-    const each = e.amount / e.shares.length;
     net[e.paid_by] = (net[e.paid_by]||0) + e.amount;
-    e.shares.forEach(pid=> net[pid] = (net[pid]||0) - each);
+    const fixed = e.shares.filter(s=> s.amount!=null);
+    const even  = e.shares.filter(s=> s.amount==null);
+    const sumFixed = fixed.reduce((a,s)=> a + Number(s.amount), 0);
+    fixed.forEach(s=> net[s.person_id] = (net[s.person_id]||0) - Number(s.amount));
+    if(even.length){
+      const eachEven = (e.amount - sumFixed) / even.length;
+      even.forEach(s=> net[s.person_id] = (net[s.person_id]||0) - eachEven);
+    }
   });
   // round to cents
   Object.keys(net).forEach(k=> net[k]=Math.round(net[k]*100)/100);
@@ -289,32 +334,42 @@ function render(){
   $('trip-sub').textContent = state.people.length + ' people · ' +
        state.expenses.length + ' expenses · ' + cur;
 
-  // people chips
+  // people chips (tap name to toggle child; ✕ removes)
   $('people-list').innerHTML = state.people.length ?
-    state.people.map(p=>`<span class="chip">${esc(p.name)}
+    state.people.map(p=>`<span class="chip">
+      <span style="cursor:pointer" onclick="toggleChild('${p.id}')">${esc(p.name)}${p.is_child?'<span class="badge">🧒 child</span>':''}</span>
       <button class="ghost" onclick="removePerson('${p.id}')">✕</button></span>`).join('') :
     '<p class="muted">No people yet. Add everyone on the trip.</p>';
 
   // paid-by dropdown
-  $('exp-paidby').innerHTML = state.people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  $('exp-paidby').innerHTML = state.people.map(p=>`<option value="${p.id}">${esc(p.name)}${p.is_child?' 🧒':''}</option>`).join('');
 
-  // shared-by picker (default everyone ticked)
-  $('share-pick').innerHTML = state.people.map(p=>
-    `<label class="pick"><input type="checkbox" value="${p.id}" checked> ${esc(p.name)}</label>`).join('');
+  // shared-by picker (default everyone ticked); children get an optional price box
+  $('share-pick').innerHTML = state.people.map(p=>{
+    const cb = `<label class="pick"><input type="checkbox" class="share-cb" value="${p.id}" checked> ${esc(p.name)}${p.is_child?'<span class="badge">🧒</span>':''}</label>`;
+    if(!p.is_child) return cb;
+    return `<div class="pickwrap">${cb}
+      <input class="kidamt" data-pid="${p.id}" type="number" min="0" step="0.01" placeholder="child's price (blank=even)"></div>`;
+  }).join('');
 
   // expense list
-  $('expense-list').innerHTML = state.expenses.length ? state.expenses.map(e=>`
+  $('expense-list').innerHTML = state.expenses.length ? state.expenses.map(e=>{
+    const fixedCount = e.shares.filter(s=> s.amount!=null).length;
+    const note = fixedCount
+      ? `${e.shares.length} people · ${fixedCount} at a set price`
+      : `split ${e.shares.length} way${e.shares.length>1?'s':''}`;
+    return `
     <div class="expense">
       <div class="row">
         <div>
           <div><b>${esc(e.title)}</b></div>
-          <div class="muted">Paid by ${esc(nameOf(e.paid_by))} · split ${e.shares.length} way${e.shares.length>1?'s':''}
+          <div class="muted">Paid by ${esc(nameOf(e.paid_by))} · ${note}
             ${e.shares.length<state.people.length?` <span class="pill">excludes ${state.people.length-e.shares.length}</span>`:''}</div>
         </div>
         <div class="shrink amt">${money(e.amount,cur)}</div>
         <div class="shrink"><button class="ghost" onclick="removeExpense('${e.id}')">Delete</button></div>
       </div>
-    </div>`).join('') : '<p class="muted">No expenses yet.</p>';
+    </div>`; }).join('') : '<p class="muted">No expenses yet.</p>';
 
   // settlement
   if(state.people.length && state.expenses.length){
@@ -343,6 +398,7 @@ function esc(s){ return String(s).replace(/[&<>"']/g, m=>(
 // expose handlers used in inline onclick
 window.removePerson = removePerson;
 window.removeExpense = removeExpense;
+window.toggleChild = toggleChild;
 
 boot();
 </script>
